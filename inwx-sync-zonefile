@@ -1,0 +1,96 @@
+#!/usr/bin/env python3
+# encoding: utf-8 (as per PEP 263)
+
+from datetime import datetime, timezone
+import argparse
+import netrc
+from INWX.Domrobot import ApiClient, ApiType
+from dns import zone
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+            "-d",
+            "--debug",
+            action="store_true",
+            help="Enable debug output."
+            )
+    parser.add_argument(
+            "--ote",
+            action="store_true",
+            help="Use the INWX \"OTE\" testing environment instead of the \"live\" one."
+            )
+    parser.add_argument(
+            "-n",
+            "--dry-run",
+            action="store_true",
+            help="Do not actually save any changes to the zone."
+            )
+    parser.add_argument(
+            "-t",
+            "--tfa",
+            help="""Supply a 2-factor authentication token. If 2FA is enabled and th\
+                    is is not given, you will be asked interactively."""
+                    )
+    parser.add_argument(
+            "-o",
+            "--output",
+            help="""Output file to write the zone file to. This file is written befo\
+                    re any changes are made to the zone contents."""
+                    )
+    parser.add_argument(
+            "-i",
+            "--input",
+            help="Input file to read the new zone contents from."
+            )
+    parser.add_argument(
+            dest="domain",
+            help="The domain name to read/update."
+            )
+
+    args = parser.parse_args()
+
+    domain = args.domain.rstrip('.')
+    fqdn = domain + '.'
+
+    api_url = ApiClient.API_OTE_URL if args.ote else ApiClient.API_LIVE_URL
+    api_host = api_url.split('//')[-1]
+
+    nr = netrc.netrc()
+    auth = nr.authenticators(api_host)
+    if not auth:
+        raise Exception('No authentication credentials found in netrc for machine "%s".' % api_host)
+    username, _, password = auth
+
+    api_client = ApiClient(api_url=api_url, debug_mode=args.debug, api_type=ApiType.JSON_RPC)
+
+    params = {'lang': 'en', 'user': username, 'pass': password}
+    login_result = api_client.call_api('account.login', params)
+
+    tfa_token = args.tfa
+    if not tfa_token:
+        tfa_token = input('2FA token: ')
+    api_client.call_api('account.unlock', {'tan': tfa_token})
+
+    export = api_client.call_api(api_method='nameserver.export', method_params={'domain': domain})
+    current_zone_content = export['resData']['export']
+
+    if args.output:
+        with open(args.output, 'w') as output_file:
+            output_file.write('; Exported by inwx-sync-zonefile via the INWX API on %s\n' % datetime.now(timezone.utc).strftime('%F %T %Z'))
+            output_file.write('$ORIGIN %s\n' % fqdn)
+            output_file.write(current_zone_content)
+
+    if args.input:
+        with open(args.input, 'r') as input_file:
+            current_zone = zone.from_text(current_zone_content, origin=fqdn)
+            new_zone = zone.from_file(input_file, origin=fqdn)
+
+            current_zone_records = set(current_zone.to_text().splitlines())
+            new_zone_records = set(new_zone.to_text().splitlines())
+
+            print('added', list(new_zone_records - current_zone_records))
+            print('removed', list(current_zone_records - new_zone_records))
+
+if __name__ == '__main__':
+    main()
