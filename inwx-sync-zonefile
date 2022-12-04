@@ -97,25 +97,50 @@ def main():
             rrsets_to_delete = zonefile.read_rrsets('\n'.join(current_zone_records - new_zone_records), rdclass=None, origin=fqdn)
             for rr in rrsets_to_delete:
                 if args.debug:
-                    sys.stderr.write('%sDeleting record: %s\n' % ('[Simulating] ' if args.dry_run else '', rr))
+                    sys.stderr.write('Querying record: %s\n' % (rr))
 
-                result = api_client.call_api('nameserver.info', {'domain': domain, 'type': rr.rdtype.name, 'name': str(rr.name), 'ttl': rr.ttl})
+                result = api_client.call_api('nameserver.info', {'domain': domain.strip('.'), 'type': rr.rdtype.name, 'name': str(rr.name), 'ttl': rr.ttl})
                 if result.get('code', 0) != 1000 or args.debug:
-                    sys.stderr.write('Result: %s\n' % result)
+                    sys.stderr.write('Result for nameserver.info on "%s": %s\n' % (rr, result))
+                record_ids = result.get('resData', dict()).get('record', [])
+                if not record_ids:
+                    sys.stderr.write('No existing record found (even though it existed in the pre-calculated diff): %s\n' % (rr))
+                    continue
+
+                for record_id in record_ids:
+                    if args.debug:
+                        sys.stderr.write('%sDeleting record: %s\n' % ('[Simulating] ' if args.dry_run else '', record_id))
+
+                    params = {
+                            'id': record_id,
+                            'testing': True or args.dry_run,
+                            }
+                    result = api_client.call_api('nameserver.deleteRecord', params)
+                    if result.get('code', 0) != 1000 or args.debug:
+                        sys.stderr.write('Result for nameserver.deleteRecord on "%s"/id=%d: %s\n' % (rr, record_id, result))
 
             rrsets_to_add = zonefile.read_rrsets('\n'.join(new_zone_records - current_zone_records), rdclass=None, origin=fqdn)
             for rr in rrsets_to_add:
                 if args.debug:
                     sys.stderr.write('%sCreating record: %s\n' % ('[Simulating] ' if args.dry_run else '', rr))
 
-                params = {'domain': domain, 'testing': True, 'type': rr.rdtype.name, 'name': str(rr.name), 'ttl': rr.ttl}
+                params = {
+                        'domain': domain,
+                        'type': rr.rdtype.name,
+                        'name': str(rr.name),
+                        'ttl': rr.ttl,
+                        'testing': args.dry_run,
+                        # value: added later
+                        # prio: added later if applicable
+                        }
 
                 # Here comes a really crappy heuristic, because dnspython
                 # doesn't convert from_text to typed Record classes (which
                 # matters for MX, SRV, etc, because INWX requires their
                 # priority field to be given as a separate parameter).
                 # I would have expected to use something like hasattr(rr,
-                # 'priority'), but alas...
+                # 'priority'), but alas, we have to check if the first field is
+                # a number (and therefore probably a priority value)...
                 parts = rr.to_text().split(maxsplit=5)
                 if hasattr(rr, 'priority'):
                     # Check for a proper 'priority' attribute, just in case support gets added at some point...
@@ -133,7 +158,7 @@ def main():
                 params['content'] = value
                 result = api_client.call_api('nameserver.createRecord', params)
                 if result.get('code', 0) != 1000 or args.debug:
-                    sys.stderr.write('Result: %s\n' % result)
+                    sys.stderr.write('Result for nameserver.createRecord on "%s": %s\n' % (rr, result))
 
 if __name__ == '__main__':
     main()
