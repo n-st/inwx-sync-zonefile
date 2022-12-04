@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # encoding: utf-8 (as per PEP 263)
 
+import sys
 from datetime import datetime, timezone
 import argparse
 import netrc
 from INWX.Domrobot import ApiClient, ApiType
-from dns import zone
+from dns import zone, zonefile
 
 def main():
     parser = argparse.ArgumentParser()
@@ -76,12 +77,16 @@ def main():
     current_zone_content = export['resData']['export']
 
     if args.output:
+        if args.debug:
+            sys.stderr.write('Writing zone to "%s"\n' % args.output)
         with open(args.output, 'w') as output_file:
             output_file.write('; Exported by inwx-sync-zonefile via the INWX API on %s\n' % datetime.now(timezone.utc).strftime('%F %T %Z'))
             output_file.write('$ORIGIN %s\n' % fqdn)
             output_file.write(current_zone_content)
 
     if args.input:
+        if args.debug:
+            sys.stderr.write('Reading zone from "%s"\n' % args.input)
         with open(args.input, 'r') as input_file:
             current_zone = zone.from_text(current_zone_content, origin=fqdn)
             new_zone = zone.from_file(input_file, origin=fqdn)
@@ -89,8 +94,46 @@ def main():
             current_zone_records = set(current_zone.to_text().splitlines())
             new_zone_records = set(new_zone.to_text().splitlines())
 
-            print('added', list(new_zone_records - current_zone_records))
-            print('removed', list(current_zone_records - new_zone_records))
+            rrsets_to_delete = zonefile.read_rrsets('\n'.join(current_zone_records - new_zone_records), rdclass=None, origin=fqdn)
+            for rr in rrsets_to_delete:
+                if args.debug:
+                    sys.stderr.write('%sDeleting record: %s\n' % ('[Simulating] ' if args.dry_run else '', rr))
+
+                result = api_client.call_api('nameserver.info', {'domain': domain, 'type': rr.rdtype.name, 'name': str(rr.name), 'ttl': rr.ttl})
+                if result.get('code', 0) != 1000 or args.debug:
+                    sys.stderr.write('Result: %s\n' % result)
+
+            rrsets_to_add = zonefile.read_rrsets('\n'.join(new_zone_records - current_zone_records), rdclass=None, origin=fqdn)
+            for rr in rrsets_to_add:
+                if args.debug:
+                    sys.stderr.write('%sCreating record: %s\n' % ('[Simulating] ' if args.dry_run else '', rr))
+
+                params = {'domain': domain, 'testing': True, 'type': rr.rdtype.name, 'name': str(rr.name), 'ttl': rr.ttl}
+
+                # Here comes a really crappy heuristic, because dnspython
+                # doesn't convert from_text to typed Record classes (which
+                # matters for MX, SRV, etc, because INWX requires their
+                # priority field to be given as a separate parameter).
+                # I would have expected to use something like hasattr(rr,
+                # 'priority'), but alas...
+                parts = rr.to_text().split(maxsplit=5)
+                if hasattr(rr, 'priority'):
+                    # Check for a proper 'priority' attribute, just in case support gets added at some point...
+                    params['prio'] = rr.priority
+                    value = ' '.join(parts[4:])
+                else:
+                    try:
+                        # First part of the value is a number => assume it's a priority
+                        prio = int(parts[4])
+                        params['prio'] = prio
+                        value = ' '.join(parts[5:])
+                    except ValueError:
+                        # First part of the value is NOT a number => combine the whole value into a string
+                        value = ' '.join(parts[4:])
+                params['content'] = value
+                result = api_client.call_api('nameserver.createRecord', params)
+                if result.get('code', 0) != 1000 or args.debug:
+                    sys.stderr.write('Result: %s\n' % result)
 
 if __name__ == '__main__':
     main()
