@@ -7,6 +7,7 @@ import argparse
 import netrc
 from INWX.Domrobot import ApiClient, ApiType
 from dns import zone, zonefile
+import dns
 
 def zone_to_records(zone):
     return set(zone.to_text().splitlines())
@@ -62,22 +63,40 @@ def parse_args():
 
     args.domain = args.domain.rstrip('.')
     args.fqdn = args.domain + '.'
+    args.origin = dns.name.Name(args.fqdn.split('.'))
 
     return args
 
 def delete_records(args, api_client, records, origin):
-    rrsets_to_delete = zonefile.read_rrsets('\n'.join(records), rdclass=None, origin=origin)
+    # Note: nameserver.info needs fully-qualified subdomain without trailing dot:
+    # {"method": "nameserver.info", "params": {"domain": "voidptr-test.de", "name": "voidptr-test.de"}}
+    #   'record': [{'id': 1000667632,
+    #     'name': 'voidptr-test.de',
+    #     'type': 'NS',
+    #     'content': 'ns.inwx.de',
+    #     'ttl': 86400,
+    #     'prio': 0},
+    # type is case-insensitive. ttl and prio can be str or int.
 
-    for rr in rrsets_to_delete:
+    for record in records:
+        rr = zonefile.read_rrsets(record, rdclass=None, origin=origin, relativize=True)[0]
+
         if args.debug:
-            sys.stderr.write('Querying record: %s\n' % (rr))
+            sys.stderr.write('Querying record: %s\n' % (record))
 
-        result = api_client.call_api('nameserver.info', {'domain': args.domain, 'type': rr.rdtype.name, 'name': str(rr.name), 'ttl': rr.ttl})
+        result = api_client.call_api(
+                'nameserver.info',
+                {
+                    'domain': args.domain,
+                    'type': rr.rdtype.name,
+                    'name': rr.name.derelativize(origin=origin).to_text().rstrip('.'),
+                    'ttl': rr.ttl
+                })
         if result.get('code', 0) != 1000 or args.debug:
-            sys.stderr.write('Result for nameserver.info on "%s": %s\n' % (rr, result))
-        record_ids = result.get('resData', dict()).get('record', [])
+            sys.stderr.write('Result for nameserver.info on "%s": %s\n' % (record, result))
+        record_ids = [item.get('id') for item in result.get('resData', dict()).get('record', []) if 'id' in item]
         if not record_ids:
-            sys.stderr.write('No existing record found (even though it existed in the pre-calculated diff): %s\n' % (rr))
+            sys.stderr.write('No existing record found (even though it existed in the pre-calculated diff): %s\n' % (record))
             continue
 
         for record_id in record_ids:
@@ -86,13 +105,26 @@ def delete_records(args, api_client, records, origin):
 
             params = {
                     'id': record_id,
-                    'testing': True or args.dry_run,
+                    'testing': args.dry_run,
                     }
             result = api_client.call_api('nameserver.deleteRecord', params)
             if result.get('code', 0) != 1000 or args.debug:
-                sys.stderr.write('Result for nameserver.deleteRecord on "%s"/id=%d: %s\n' % (rr, record_id, result))
+                sys.stderr.write('Result for nameserver.deleteRecord on "%s"/id=%d: %s\n' % (record, record_id, result))
 
 def create_records(args, api_client, records, origin):
+    # Note: nameserver.createRecord needs fully-qualified `domain` without trailing dot,
+    # but a relative `name` (or '' or '@' for root node):
+    #   params = {
+    #           'domain': 'voidptr-test.de',
+    #           'type': 'A',
+    #           'name': '@',
+    #           'ttl': 3600,
+    #           'testing': False,
+    #           'content': '127.5.2.3',
+    #           'prio': 0,
+    #           }
+    #   result = api_client.call_api('nameserver.createRecord', params)
+    # prio can be present; is ignored if not applicable to the record type
     rrsets_to_add = zonefile.read_rrsets('\n'.join(records), rdclass=None, origin=origin)
 
     for rr in rrsets_to_add:
@@ -102,7 +134,7 @@ def create_records(args, api_client, records, origin):
         params = {
                 'domain': args.domain,
                 'type': rr.rdtype.name,
-                'name': str(rr.name),
+                'name': rr.name.relativize(origin=args.origin).to_text(),
                 'ttl': rr.ttl,
                 'testing': args.dry_run,
                 # value: added later
@@ -178,8 +210,8 @@ def main():
             sys.stderr.write('Reading zone from "%s"\n' % args.input)
         with open(args.input, 'r') as input_file:
             new_zone_records = zonefile_to_records(input_file, args.fqdn)
-            delete_records(args, api_client, current_zone_records - new_zone_records, origin=args.fqdn)
-            create_records(args, api_client, new_zone_records - current_zone_records, origin=args.fqdn)
+            delete_records(args, api_client, current_zone_records - new_zone_records, origin=args.origin)
+            create_records(args, api_client, new_zone_records - current_zone_records, origin=args.origin)
 
 if __name__ == '__main__':
     main()
