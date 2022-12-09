@@ -8,6 +8,15 @@ import netrc
 from INWX.Domrobot import ApiClient, ApiType
 from dns import zone, zonefile
 
+def zone_to_records(zone):
+    return set(zone.to_text().splitlines())
+
+def zonetext_to_records(zone_text, origin):
+    return zone_to_records(zone.from_text(zone_text, origin=origin))
+
+def zonefile_to_records(zone_file, origin):
+    return zone_to_records(zone.from_file(zone_file, origin=origin))
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -75,6 +84,7 @@ def main():
 
     export = api_client.call_api(api_method='nameserver.export', method_params={'domain': domain})
     current_zone_content = export['resData']['export']
+    current_zone_records = zonetext_to_records(current_zone_content, fqdn)
 
     if args.output:
         if args.debug:
@@ -82,17 +92,14 @@ def main():
         with open(args.output, 'w') as output_file:
             output_file.write('; Exported by inwx-sync-zonefile via the INWX API on %s\n' % datetime.now(timezone.utc).strftime('%F %T %Z'))
             output_file.write('$ORIGIN %s\n' % fqdn)
-            output_file.write(current_zone_content)
+            for record in sorted(current_zone_records):
+                output_file.write('%s\n' % record)
 
     if args.input:
         if args.debug:
             sys.stderr.write('Reading zone from "%s"\n' % args.input)
         with open(args.input, 'r') as input_file:
-            current_zone = zone.from_text(current_zone_content, origin=fqdn)
-            new_zone = zone.from_file(input_file, origin=fqdn)
-
-            current_zone_records = set(current_zone.to_text().splitlines())
-            new_zone_records = set(new_zone.to_text().splitlines())
+            new_zone_records = zonefile_to_records(input_file, fqdn)
 
             rrsets_to_delete = zonefile.read_rrsets('\n'.join(current_zone_records - new_zone_records), rdclass=None, origin=fqdn)
             for rr in rrsets_to_delete:
