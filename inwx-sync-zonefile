@@ -14,7 +14,7 @@ def main():
             "-d",
             "--debug",
             action="store_true",
-            help="Enable debug output."
+            help="Enable debug output. Warning: This may output password in plaintext!"
             )
     parser.add_argument(
             "--ote",
@@ -46,7 +46,7 @@ def main():
             )
     parser.add_argument(
             dest="domain",
-            help="The domain name to read/update."
+            help="The domain name to read/update. Accepted both with and without trailing dot."
             )
 
     args = parser.parse_args()
