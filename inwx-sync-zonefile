@@ -223,22 +223,36 @@ def main():
     nr = netrc.netrc()
     auth = nr.authenticators(api_host)
     if not auth:
-        raise Exception('No authentication credentials found in netrc for machine "%s".' % api_host)
+        sys.stderr.write('No authentication credentials found in netrc for machine "%s". Aborting.\n' % (api_host))
+        sys.exit(1)
     username, _, password = auth
 
     api_client = ApiClient(api_url=api_url, debug_mode=args.debug, api_type=ApiType.JSON_RPC)
 
     params = {'lang': 'en', 'user': username, 'pass': password}
     login_result = api_client.call_api('account.login', params)
+    if login_result.get('code', 0) != 1000:
+        sys.stderr.write('Login failed; aborting! API response: %s\n' % (login_result))
+        sys.exit(1)
 
-    tfa_token = args.tfa
-    if not tfa_token:
-        tfa_token = input('2FA token: ')
-    api_client.call_api('account.unlock', {'tan': tfa_token})
+    if login_result.get('resData', {}).get('tfa', ''):
+        tfa_token = args.tfa
+        if not tfa_token:
+            tfa_token = input('2FA token: ')
+        tfa_result = api_client.call_api('account.unlock', {'tan': tfa_token})
+        if tfa_result.get('code', 0) != 1000:
+            sys.stderr.write('Two-factor unlock failed; aborting! API response: %s\n' % (tfa_result))
+            sys.exit(1)
 
     # get current zone contents
     export = api_client.call_api(api_method='nameserver.export', method_params={'domain': args.domain})
-    current_zone_content = export['resData']['export']
+    if export.get('code', 0) != 1000:
+        sys.stderr.write('Zone export; aborting! API response: %s\n' % (export))
+        sys.exit(1)
+    current_zone_content = export.get('resData', {}).get('export', '')
+    if not current_zone_content:
+        sys.stderr.write('Zone export was successful, but result is empty. This should not happen; aborting! API response: %s\n' % (export))
+        sys.exit(1)
     current_zone_records = zonetext_to_records(current_zone_content, args.fqdn)
 
     # if requested, write current zone contents to file
