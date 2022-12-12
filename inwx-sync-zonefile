@@ -78,6 +78,11 @@ def parse_args():
             help="Input file to read the new zone contents from. If this is not given, no changes are made to the zone."
             )
     parser.add_argument(
+            "-x",
+            "--exclude",
+            help="""Record types to skip during import (they won't be deleted or created). Can be given multiple times. May contain comma-separated lists. SOA records are always skipped.""",
+            action='append')
+    parser.add_argument(
             dest="domain",
             help="The domain name to read/update. Accepted both with and without trailing dot."
             )
@@ -87,6 +92,10 @@ def parse_args():
     args.domain = args.domain.rstrip('.')
     args.fqdn = args.domain + '.'
     args.origin = dns.name.Name(args.fqdn.split('.'))
+    exclude = []
+    for x in args.exclude:
+        exclude += [s.lower() for s in x.split(',')]
+    args.exclude = exclude
 
     return args
 
@@ -103,6 +112,11 @@ def delete_records(args, api_client, records, origin):
 
     for record in records:
         rr = zonefile.read_rrsets(record, rdclass=None, origin=origin, relativize=True)[0]
+
+        if rr.rdtype.name.lower() in args.exclude:
+            if args.debug:
+                sys.stderr.write('Skipping excluded record type: %s\n' % (record))
+            continue
 
         if args.debug:
             sys.stderr.write('Querying record: %s\n' % (record))
@@ -155,6 +169,11 @@ def create_records(args, api_client, records, origin):
     rrsets_to_add = zonefile.read_rrsets('\n'.join(records), rdclass=None, origin=origin)
 
     for rr in rrsets_to_add:
+        if rr.rdtype.name.lower() in args.exclude:
+            if args.debug:
+                sys.stderr.write('Skipping excluded record type: %s\n' % (record))
+            continue
+
         if args.debug:
             sys.stderr.write('%sCreating record: %s\n' % ('[Simulating] ' if args.dry_run else '', rr))
 
