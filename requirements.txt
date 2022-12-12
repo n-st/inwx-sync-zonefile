@@ -1,0 +1,2 @@
+dnspython==2.2.1
+inwx-domrobot==3.0.5
