@@ -111,12 +111,15 @@ def delete_records(args, api_client, records, origin):
     #     'prio': 0},
     # type is case-insensitive. ttl and prio can be str or int.
 
+    deleted, skipped, failed = 0, 0, 0
+
     for record in records:
         rr = zonefile.read_rrsets(record, rdclass=None, origin=origin, relativize=True)[0]
 
         if rr.rdtype.name.lower() in args.exclude:
             if args.debug:
                 sys.stderr.write('Skipping excluded record type: %s\n' % (record))
+            skipped += 1
             continue
 
         if args.debug:
@@ -136,6 +139,7 @@ def delete_records(args, api_client, records, origin):
                 })
         if result.get('code', 0) != 1000 or args.debug:
             sys.stderr.write('Result for nameserver.info on "%s": %s\n' % (record, result))
+
         record_ids = [item.get('id') for item in result.get('resData', dict()).get('record', []) if 'id' in item]
         if not record_ids:
             sys.stderr.write('No existing record found (even though it existed in the pre-calculated diff): %s\n' % (record))
@@ -152,6 +156,12 @@ def delete_records(args, api_client, records, origin):
             result = api_client.call_api('nameserver.deleteRecord', params)
             if result.get('code', 0) != 1000 or args.debug:
                 sys.stderr.write('Result for nameserver.deleteRecord on "%s"/id=%d: %s\n' % (record, record_id, result))
+            if result.get('code', 0) == 1000:
+                deleted += 1
+            else:
+                failed +=1
+
+    return deleted, skipped, failed
 
 def create_records(args, api_client, records, origin):
     # Note: nameserver.createRecord needs fully-qualified `domain` without trailing dot,
@@ -167,12 +177,16 @@ def create_records(args, api_client, records, origin):
     #           }
     #   result = api_client.call_api('nameserver.createRecord', params)
     # prio can be present; is ignored if not applicable to the record type
-    rrsets_to_add = zonefile.read_rrsets('\n'.join(records), rdclass=None, origin=origin)
 
-    for rr in rrsets_to_add:
+    created, skipped, failed = 0, 0, 0
+
+    for record in records:
+        rr = zonefile.read_rrsets(record, rdclass=None, origin=origin)[0]
+
         if rr.rdtype.name.lower() in args.exclude:
             if args.debug:
                 sys.stderr.write('Skipping excluded record type: %s\n' % (record))
+            skipped += 1
             continue
 
         if args.debug:
@@ -193,6 +207,12 @@ def create_records(args, api_client, records, origin):
         result = api_client.call_api('nameserver.createRecord', params)
         if result.get('code', 0) != 1000 or args.debug:
             sys.stderr.write('Result for nameserver.createRecord on "%s": %s\n' % (rr, result))
+        if result.get('code', 0) == 1000:
+            created += 1
+        else:
+            failed += 1
+
+    return created, skipped, failed
 
 def main():
     args = parse_args()
@@ -237,8 +257,14 @@ def main():
             sys.stderr.write('Reading zone from "%s"\n' % args.input)
         with open(args.input, 'r') as input_file:
             new_zone_records = zonefile_to_records(input_file, args.fqdn)
-            delete_records(args, api_client, current_zone_records - new_zone_records, origin=args.origin)
-            create_records(args, api_client, new_zone_records - current_zone_records, origin=args.origin)
+            records_to_delete = current_zone_records - new_zone_records
+            records_to_create = new_zone_records - current_zone_records
+            if args.debug:
+                sys.stderr.write('Planning to change (delete/create): %d/%d records\n' % (len(records_to_delete), len(records_to_create)))
+            deleted, dskipped, dfailed = delete_records(args, api_client, current_zone_records - new_zone_records, origin=args.origin)
+            created, cskipped, cfailed = create_records(args, api_client, new_zone_records - current_zone_records, origin=args.origin)
+            if args.debug or (deleted + dskipped) != len(records_to_delete) or (created + cskipped) != len(records_to_create):
+                sys.stderr.write('Result (deleted/skipped/failed + created/skipped/failed): %d/%d/%d + %d/%d/%d records\n' % (deleted, dskipped, dfailed, created, cskipped, cfailed))
 
 if __name__ == '__main__':
     main()
