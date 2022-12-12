@@ -81,7 +81,8 @@ def parse_args():
             "-x",
             "--exclude",
             help="""Record types to skip during import (they won't be deleted or created). Can be given multiple times. May contain comma-separated lists. SOA records are always skipped.""",
-            action='append')
+            action='append',
+            default=['soa'])
     parser.add_argument(
             dest="domain",
             help="The domain name to read/update. Accepted both with and without trailing dot."
