@@ -65,19 +65,17 @@ def parse_args():
     parser.add_argument(
             "-t",
             "--tfa",
-            help="""Supply a 2-factor authentication token. If 2FA is enabled and th\
-                    is is not given, you will be asked interactively."""
+            help="""Supply a 2-factor authentication token. If 2FA is enabled and this is not given, you will be asked interactively."""
                     )
     parser.add_argument(
             "-o",
             "--output",
-            help="""Output file to write the zone file to. This file is written befo\
-                    re any changes are made to the zone contents."""
+            help="""Output file to write the zone file to. This file is written before any changes are made to the zone contents."""
                     )
     parser.add_argument(
             "-i",
             "--input",
-            help="Input file to read the new zone contents from."
+            help="Input file to read the new zone contents from. If this is not given, no changes are made to the zone."
             )
     parser.add_argument(
             dest="domain",
